@@ -3,9 +3,9 @@
 .gitignore
 .gitattributes
 
-# Documentation
-README.md
+# Documentation (*.md except README — нужен для hatch/pyproject в Docker)
 *.md
+!README.md
 docs/
 
 # Environment files
