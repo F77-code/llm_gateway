@@ -1,0 +1,48 @@
+# General OS artifacts
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environments
+.env
+!.env.example
+*.env.local
+
+# Logs and coverage
+logs/
+*.log
+coverage/
+*.lcov
+
+# Build artifacts
+build/
+dist/
+.tmp/
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+
+# Misc
+*.bak
+*.tmp
+
+# cookies files
+*.json
+
+# sql
+*.sqlite
