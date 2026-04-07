@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Shared provider registry (`model` → upstream `BaseLLMProvider` instance)."""
+
+from __future__ import annotations
 
 import httpx
 
