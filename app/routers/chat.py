@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import logging
+
+import redis.asyncio as redis
 from fastapi import APIRouter, Depends, HTTPException, status
-from app.dependencies import get_api_key
+from app.middleware.ratelimit import enforce_rate_limit
 from app.models.chat_completion import ChatCompletionRequest, ChatCompletionResponse
 from app.providers.base import (
     ProviderError,
     ProviderRateLimitError,
 )
 from app.providers.registry import UnknownModelError, get_provider
+from app.services.cost import calculate_cost
 
 router = APIRouter(prefix="/v1", tags=["chat"])
+logger = logging.getLogger(__name__)
 
 
 @router.post(
@@ -18,7 +23,7 @@ router = APIRouter(prefix="/v1", tags=["chat"])
 )
 async def chat_completions(
     request: ChatCompletionRequest,
-    _: str = Depends(get_api_key),
+    api_key: str = Depends(enforce_rate_limit),
 ) -> ChatCompletionResponse:
     try:
         provider = get_provider(request.model)
@@ -34,7 +39,7 @@ async def chat_completions(
         ) from exc
 
     try:
-        return await provider.chat_completion(request)
+        response = await provider.chat_completion(request)
     except ProviderRateLimitError as exc:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -45,3 +50,22 @@ async def chat_completions(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(exc),
         ) from exc
+
+    usage = response.usage
+    if usage is not None:
+        total_cost = calculate_cost(
+            request.model,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+        )
+        try:
+            await request.app.state.redis_service.increment_usage_stats(
+                api_key=api_key,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                total_cost=total_cost,
+            )
+        except redis.RedisError as exc:
+            logger.warning("Failed to persist usage stats to Redis: %s", exc)
+
+    return response
