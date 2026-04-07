@@ -3,11 +3,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import redis.asyncio as redis
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 from app.dependencies import get_api_key
-from app.exceptions import AuthenticationError
+from app.exceptions import AuthenticationError, ServiceUnavailableError
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
@@ -63,9 +63,9 @@ async def get_stats(
         daily_raw = await redis_service.client.hgetall(daily_key)
         monthly_raw = await redis_service.client.hgetall(monthly_key)
     except redis.RedisError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Stats storage unavailable: {exc}",
+        raise ServiceUnavailableError(
+            f"Stats storage unavailable: {exc}",
+            code="stats_storage_unavailable",
         ) from exc
 
     return StatsResponse(
