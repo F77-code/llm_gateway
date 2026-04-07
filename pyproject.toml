@@ -23,6 +23,11 @@ dev = [
     "ruff",
     "black",
     "isort",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-mock>=3.0",
+    "fakeredis>=2.0",
+    "asgi-lifespan>=2.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -42,6 +47,10 @@ known_first_party = ["app"]
 target-version = "py311"
 line-length = 88
 src = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
 
 [tool.ruff.lint]
 select = [
