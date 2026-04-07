@@ -107,18 +107,18 @@ class BaseLLMProvider(ABC):
             if preview:
                 msg = f"{msg}: {preview}"
             code = prev.status_code
-            kwargs: dict[str, Any] = {
+            error_kwargs: dict[str, Any] = {
                 "message": msg,
                 "status_code": code,
                 "body_preview": preview,
             }
             if code == 401:
-                raise ProviderUnauthorizedError(**kwargs) from exc
+                raise ProviderUnauthorizedError(**error_kwargs) from exc
             if code == 429:
-                raise ProviderRateLimitError(**kwargs) from exc
+                raise ProviderRateLimitError(**error_kwargs) from exc
             if code >= 500:
-                raise ProviderServerError(**kwargs) from exc
-            raise ProviderHTTPError(**kwargs) from exc
+                raise ProviderServerError(**error_kwargs) from exc
+            raise ProviderHTTPError(**error_kwargs) from exc
         except httpx.RequestError as exc:
             raise ProviderRequestError(str(exc) or "upstream request failed") from exc
         else:
