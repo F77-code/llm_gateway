@@ -3,11 +3,12 @@ from __future__ import annotations
 import time
 import logging
 
-from fastapi import Depends, HTTPException, Request, Response, status
+from fastapi import Depends, Request, Response
 import redis.asyncio as redis
 
 from app.config import get_settings
 from app.dependencies import get_api_key
+from app.exceptions import RateLimitExceeded
 
 WINDOW_SECONDS = 60
 logger = logging.getLogger(__name__)
@@ -43,10 +44,14 @@ async def enforce_rate_limit(
         return api_key
 
     if not result.allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded",
-            headers=_headers(result.limit, result.remaining, result.reset_ts),
+        raise RateLimitExceeded(
+            message="Rate limit exceeded",
+            context={
+                "headers": _headers(result.limit, result.remaining, result.reset_ts),
+                "limit": result.limit,
+                "remaining": result.remaining,
+                "reset_ts": result.reset_ts,
+            },
         )
 
     for h, v in _headers(result.limit, result.remaining, result.reset_ts).items():
