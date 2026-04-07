@@ -5,12 +5,7 @@ from app.dependencies import get_api_key
 from app.models.chat_completion import ChatCompletionRequest, ChatCompletionResponse
 from app.providers.base import (
     ProviderError,
-    ProviderHTTPError,
     ProviderRateLimitError,
-    ProviderRequestError,
-    ProviderServerError,
-    ProviderTimeoutError,
-    ProviderUnauthorizedError,
 )
 from app.providers.registry import UnknownModelError, get_provider
 
@@ -40,38 +35,13 @@ async def chat_completions(
 
     try:
         return await provider.chat_completion(request)
-    except ProviderUnauthorizedError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(exc),
-        ) from exc
     except ProviderRateLimitError as exc:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=str(exc),
         ) from exc
-    except ProviderServerError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(exc),
-        ) from exc
-    except ProviderTimeoutError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail=str(exc),
-        ) from exc
-    except ProviderHTTPError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(exc),
-        ) from exc
-    except ProviderRequestError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
-        ) from exc
     except ProviderError as exc:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(exc),
         ) from exc
