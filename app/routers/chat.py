@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 
 import redis.asyncio as redis
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from app.config import Settings
-from app.exceptions import ModelNotFound, ProviderError, RateLimitExceeded
+from app.exceptions import BadRequestError, ModelNotFound, ProviderError, RateLimitExceeded
 from app.middleware.ratelimit import enforce_rate_limit
 from app.models.chat_completion import ChatCompletionRequest, ChatCompletionResponse
 from app.providers.base import (
@@ -85,8 +84,15 @@ def _log_chat_event(
 async def chat_completions(
     body: ChatCompletionRequest,
     http_request: Request,
+    background_tasks: BackgroundTasks,
     api_key: str = Depends(enforce_rate_limit),
 ) -> ChatCompletionResponse:
+    if body.stream:
+        raise BadRequestError(
+            "Streaming is not supported. Set stream=false.",
+            code="stream_not_supported",
+        )
+
     started = time.perf_counter()
     request_id = getattr(http_request.state, "request_id", None)
     provider_name = (
@@ -198,14 +204,13 @@ async def chat_completions(
             prompt_tokens=usage.prompt_tokens,
             completion_tokens=usage.completion_tokens,
         )
-        asyncio.create_task(
-            _persist_usage_stats(
-                redis_service=http_request.app.state.redis_service,
-                api_key=api_key,
-                prompt_tokens=usage.prompt_tokens,
-                completion_tokens=usage.completion_tokens,
-                total_cost=total_cost,
-            ),
+        background_tasks.add_task(
+            _persist_usage_stats,
+            redis_service=http_request.app.state.redis_service,
+            api_key=api_key,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_cost=total_cost,
         )
 
     _log_chat_event(
