@@ -41,49 +41,45 @@ class RedisService:
         limit: int,
         window_seconds: int = 60,
         now: float | None = None,
-        max_retries: int = 5,
     ) -> RateLimitResult:
         ts = float(now if now is not None else time.time())
         member = f"{ts:.6f}:{uuid.uuid4().hex}"
-        ttl = max(window_seconds * 2, window_seconds + 1)
+        ttl = window_seconds * 2 + 1
         min_score = ts - window_seconds
 
-        for _ in range(max_retries):
-            async with self._client.pipeline(transaction=True) as pipe:
-                try:
-                    await pipe.watch(key)
-                    await pipe.zremrangebyscore(key, "-inf", min_score)
-                    current_count = int(await pipe.zcard(key))
+        # Step 1: clean up expired entries and read current count atomically.
+        async with self._client.pipeline(transaction=False) as pipe:
+            pipe.zremrangebyscore(key, "-inf", min_score)
+            pipe.zcard(key)
+            results = await pipe.execute()
 
-                    if current_count >= limit:
-                        oldest = await pipe.zrange(key, 0, 0, withscores=True)
-                        await pipe.reset()
-                        if oldest:
-                            reset_ts = int(float(oldest[0][1]) + window_seconds)
-                        else:
-                            reset_ts = int(ts + window_seconds)
-                        return RateLimitResult(
-                            allowed=False,
-                            limit=limit,
-                            remaining=0,
-                            reset_ts=reset_ts,
-                        )
+        current_count = int(results[1])
 
-                    pipe.multi()
-                    pipe.zadd(key, {member: ts})
-                    pipe.expire(key, ttl)
-                    await pipe.execute()
-                    return RateLimitResult(
-                        allowed=True,
-                        limit=limit,
-                        remaining=max(0, limit - (current_count + 1)),
-                        reset_ts=int(ts + window_seconds),
-                    )
-                except redis.WatchError:
-                    continue
+        if current_count >= limit:
+            oldest = await self._client.zrange(key, 0, 0, withscores=True)
+            if oldest:
+                reset_ts = int(float(oldest[0][1]) + window_seconds)
+            else:
+                reset_ts = int(ts + window_seconds)
+            return RateLimitResult(
+                allowed=False,
+                limit=limit,
+                remaining=0,
+                reset_ts=reset_ts,
+            )
 
-        # Under high contention retries can exhaust; treat as unavailable.
-        raise redis.RedisError("Rate-limit transaction retries exhausted")
+        # Step 2: add the new entry.
+        async with self._client.pipeline(transaction=False) as pipe:
+            pipe.zadd(key, {member: ts})
+            pipe.expire(key, ttl)
+            await pipe.execute()
+
+        return RateLimitResult(
+            allowed=True,
+            limit=limit,
+            remaining=max(0, limit - current_count - 1),
+            reset_ts=int(ts + window_seconds),
+        )
 
     async def increment_usage_stats(
         self,
