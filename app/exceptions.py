@@ -81,3 +81,37 @@ class AuthenticationError(AppError):
             code=code,
             context=context or {},
         )
+
+
+class BadRequestError(AppError):
+    def __init__(
+        self,
+        message: str = "Bad request",
+        *,
+        code: str | None = "bad_request",
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message=message,
+            status_code=400,
+            error_type="invalid_request_error",
+            code=code,
+            context=context or {},
+        )
+
+
+class ServiceUnavailableError(AppError):
+    def __init__(
+        self,
+        message: str = "Service temporarily unavailable",
+        *,
+        code: str | None = "service_unavailable",
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message=message,
+            status_code=503,
+            error_type="service_unavailable_error",
+            code=code,
+            context=context or {},
+        )
