@@ -5,12 +5,13 @@ import logging
 import time
 
 import redis.asyncio as redis
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Request
 from app.config import Settings
+from app.exceptions import ModelNotFound, ProviderError, RateLimitExceeded
 from app.middleware.ratelimit import enforce_rate_limit
 from app.models.chat_completion import ChatCompletionRequest, ChatCompletionResponse
 from app.providers.base import (
-    ProviderError,
+    ProviderError as UpstreamProviderError,
     ProviderRateLimitError,
 )
 from app.providers.registry import UnknownModelError, get_provider
@@ -45,6 +46,38 @@ async def _persist_usage_stats(
         logger.warning("Failed to persist usage stats to Redis: %s", exc)
 
 
+def _log_chat_event(
+    *,
+    level: int,
+    request_id: str | None,
+    api_key: str,
+    model: str,
+    provider: str,
+    latency_ms: int,
+    tokens: dict[str, int],
+    cost: float,
+    status: str,
+    error: str | None = None,
+    error_context: dict[str, object] | None = None,
+    exc_info: bool = False,
+) -> None:
+    payload: dict[str, object] = {
+        "request_id": request_id,
+        "api_key": _mask_api_key(api_key),
+        "model": model,
+        "provider": provider,
+        "latency_ms": latency_ms,
+        "tokens": tokens,
+        "cost": cost,
+        "status": status,
+    }
+    if error is not None:
+        payload["error"] = error
+    if error_context:
+        payload["error_context"] = error_context
+    logger.log(level, "chat.request", extra={"payload": payload}, exc_info=exc_info)
+
+
 @router.post(
     "/chat/completions",
     response_model=ChatCompletionResponse,
@@ -69,93 +102,88 @@ async def chat_completions(
     total_cost = 0.0
 
     try:
-        provider = get_provider(request.model)
+        provider = get_provider(body.model)
     except UnknownModelError as exc:
-        logger.warning(
-            "chat.request",
-            extra={
-                "payload": {
-                    "request_id": request_id,
-                    "api_key": _mask_api_key(api_key),
-                    "model": body.model,
-                    "provider": provider_name,
-                    "latency_ms": int((time.perf_counter() - started) * 1000),
-                    "tokens": usage_payload,
-                    "cost": total_cost,
-                    "status": "error",
-                    "error": f"Unknown model: {exc.model}",
-                },
-            },
+        _log_chat_event(
+            level=logging.WARNING,
+            request_id=request_id,
+            api_key=api_key,
+            model=body.model,
+            provider=provider_name,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            tokens=usage_payload,
+            cost=total_cost,
+            status="error",
+            error=f"Unknown model: {exc.model}",
         )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unknown model: {exc.model}",
-        ) from exc
+        raise ModelNotFound(exc.model) from exc
     except RuntimeError as exc:
-        logger.warning(
-            "chat.request",
-            extra={
-                "payload": {
-                    "request_id": request_id,
-                    "api_key": _mask_api_key(api_key),
-                    "model": body.model,
-                    "provider": provider_name,
-                    "latency_ms": int((time.perf_counter() - started) * 1000),
-                    "tokens": usage_payload,
-                    "cost": total_cost,
-                    "status": "error",
-                    "error": "Provider registry is not initialized",
-                },
-            },
+        _log_chat_event(
+            level=logging.ERROR,
+            request_id=request_id,
+            api_key=api_key,
+            model=body.model,
+            provider=provider_name,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            tokens=usage_payload,
+            cost=total_cost,
+            status="error",
+            error="Provider registry is not initialized",
+            exc_info=True,
         )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Provider registry is not initialized",
+        raise ProviderError(
+            "Provider registry is not initialized",
+            code="registry_not_initialized",
         ) from exc
 
     try:
         response = await provider.chat_completion(body)
     except ProviderRateLimitError as exc:
-        logger.warning(
-            "chat.request",
-            extra={
-                "payload": {
-                    "request_id": request_id,
-                    "api_key": _mask_api_key(api_key),
-                    "model": body.model,
-                    "provider": provider_name,
-                    "latency_ms": int((time.perf_counter() - started) * 1000),
-                    "tokens": usage_payload,
-                    "cost": total_cost,
-                    "status": "error",
-                    "error": str(exc),
-                },
-            },
+        _log_chat_event(
+            level=logging.WARNING,
+            request_id=request_id,
+            api_key=api_key,
+            model=body.model,
+            provider=provider_name,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            tokens=usage_payload,
+            cost=total_cost,
+            status="error",
+            error=str(exc),
+            error_context={"upstream_status": getattr(exc, "status_code", None)},
         )
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=str(exc),
+        raise RateLimitExceeded(
+            message=str(exc),
+            code="upstream_rate_limited",
+            context={"upstream_status": getattr(exc, "status_code", None)},
         ) from exc
-    except ProviderError as exc:
-        logger.warning(
-            "chat.request",
-            extra={
-                "payload": {
-                    "request_id": request_id,
-                    "api_key": _mask_api_key(api_key),
-                    "model": body.model,
-                    "provider": provider_name,
-                    "latency_ms": int((time.perf_counter() - started) * 1000),
-                    "tokens": usage_payload,
-                    "cost": total_cost,
-                    "status": "error",
-                    "error": str(exc),
-                },
+    except UpstreamProviderError as exc:
+        _log_chat_event(
+            level=logging.ERROR,
+            request_id=request_id,
+            api_key=api_key,
+            model=body.model,
+            provider=provider_name,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            tokens=usage_payload,
+            cost=total_cost,
+            status="error",
+            error=str(exc),
+            error_context={
+                "upstream_status": getattr(exc, "status_code", None),
+                "upstream_body_preview": getattr(exc, "body_preview", None),
+                "exception_class": exc.__class__.__name__,
             },
+            exc_info=True,
         )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(exc),
+        raise ProviderError(
+            message="Upstream provider request failed",
+            code="provider_request_failed",
+            context={
+                "upstream_status": getattr(exc, "status_code", None),
+                "upstream_body_preview": getattr(exc, "body_preview", None),
+                "exception_class": exc.__class__.__name__,
+            },
         ) from exc
 
     usage = response.usage
@@ -180,19 +208,15 @@ async def chat_completions(
             ),
         )
 
-    logger.info(
-        "chat.request",
-        extra={
-            "payload": {
-                "request_id": request_id,
-                "api_key": _mask_api_key(api_key),
-                "model": body.model,
-                "provider": provider_name,
-                "latency_ms": int((time.perf_counter() - started) * 1000),
-                "tokens": usage_payload,
-                "cost": total_cost,
-                "status": "ok",
-            },
-        },
+    _log_chat_event(
+        level=logging.INFO,
+        request_id=request_id,
+        api_key=api_key,
+        model=body.model,
+        provider=provider_name,
+        latency_ms=int((time.perf_counter() - started) * 1000),
+        tokens=usage_payload,
+        cost=total_cost,
+        status="ok",
     )
     return response
