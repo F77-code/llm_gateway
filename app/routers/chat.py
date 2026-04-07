@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import redis.asyncio as redis
@@ -15,6 +16,25 @@ from app.services.cost import calculate_cost
 
 router = APIRouter(prefix="/v1", tags=["chat"])
 logger = logging.getLogger(__name__)
+
+
+async def _persist_usage_stats(
+    *,
+    redis_service: object,
+    api_key: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    total_cost: float,
+) -> None:
+    try:
+        await redis_service.increment_usage_stats(
+            api_key=api_key,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_cost=total_cost,
+        )
+    except redis.RedisError as exc:
+        logger.warning("Failed to persist usage stats to Redis: %s", exc)
 
 
 @router.post(
@@ -58,14 +78,14 @@ async def chat_completions(
             prompt_tokens=usage.prompt_tokens,
             completion_tokens=usage.completion_tokens,
         )
-        try:
-            await request.app.state.redis_service.increment_usage_stats(
+        asyncio.create_task(
+            _persist_usage_stats(
+                redis_service=request.app.state.redis_service,
                 api_key=api_key,
                 prompt_tokens=usage.prompt_tokens,
                 completion_tokens=usage.completion_tokens,
                 total_cost=total_cost,
-            )
-        except redis.RedisError as exc:
-            logger.warning("Failed to persist usage stats to Redis: %s", exc)
+            ),
+        )
 
     return response
