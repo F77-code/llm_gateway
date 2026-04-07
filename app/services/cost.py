@@ -11,11 +11,39 @@ class ModelPrice:
     output_per_1m: float
 
 
-# Example baseline prices (easy to update in one place).
+# Prices per 1M tokens in USD. Kept in sync with Settings.provider_by_model.
+# Update when providers change their pricing.
 MODEL_PRICES: dict[str, ModelPrice] = {
-    "gpt-4o": ModelPrice(input_per_1m=2.50, output_per_1m=10.00),
-    "claude-3-5-sonnet": ModelPrice(input_per_1m=3.00, output_per_1m=15.00),
-    "gemini-pro": ModelPrice(input_per_1m=1.25, output_per_1m=5.00),
+    # DeepSeek
+    "deepseek-chat": ModelPrice(input_per_1m=0.14, output_per_1m=0.28),
+    "deepseek-reasoner": ModelPrice(input_per_1m=0.55, output_per_1m=2.19),
+    # Google Gemini
+    "gemini-2.5-pro": ModelPrice(input_per_1m=1.25, output_per_1m=10.00),
+    "gemini-2.5-flash": ModelPrice(input_per_1m=0.15, output_per_1m=0.60),
+    "gemini-2.5-flash-lite": ModelPrice(input_per_1m=0.10, output_per_1m=0.40),
+    "gemini-2.0-flash": ModelPrice(input_per_1m=0.10, output_per_1m=0.40),
+    "gemini-2.0-flash-lite": ModelPrice(input_per_1m=0.075, output_per_1m=0.30),
+    # xAI Grok
+    "grok-4-1-fast-non-reasoning": ModelPrice(input_per_1m=2.00, output_per_1m=10.00),
+    "grok-4-1-fast-reasoning": ModelPrice(input_per_1m=3.00, output_per_1m=15.00),
+    # Perplexity Sonar
+    "sonar": ModelPrice(input_per_1m=1.00, output_per_1m=1.00),
+    "sonar-pro": ModelPrice(input_per_1m=3.00, output_per_1m=15.00),
+    "sonar-reasoning-pro": ModelPrice(input_per_1m=2.00, output_per_1m=8.00),
+    "sonar-deep-research": ModelPrice(input_per_1m=2.00, output_per_1m=8.00),
+    # Anthropic Claude
+    "claude-opus-4-6": ModelPrice(input_per_1m=15.00, output_per_1m=75.00),
+    "claude-sonnet-4-5-20250929": ModelPrice(input_per_1m=3.00, output_per_1m=15.00),
+    "claude-haiku-4-5-20251001": ModelPrice(input_per_1m=0.80, output_per_1m=4.00),
+    # OpenAI GPT-5 family
+    "gpt-5": ModelPrice(input_per_1m=2.50, output_per_1m=10.00),
+    "gpt-5-mini": ModelPrice(input_per_1m=0.60, output_per_1m=2.40),
+    "gpt-5-nano": ModelPrice(input_per_1m=0.15, output_per_1m=0.60),
+    "gpt-5.1": ModelPrice(input_per_1m=3.00, output_per_1m=10.00),
+    "gpt-5.2": ModelPrice(input_per_1m=5.00, output_per_1m=15.00),
+    "gpt-5.3-chat-latest": ModelPrice(input_per_1m=7.50, output_per_1m=22.50),
+    "gpt-5.4": ModelPrice(input_per_1m=10.00, output_per_1m=30.00),
+    "gpt-4.1-mini": ModelPrice(input_per_1m=0.40, output_per_1m=1.60),
 }
 
 
