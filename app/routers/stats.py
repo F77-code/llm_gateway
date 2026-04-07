@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from app.dependencies import get_api_key
+from app.exceptions import AuthenticationError
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
@@ -46,9 +47,9 @@ async def get_stats(
     requester_api_key: str = Depends(get_api_key),
 ) -> StatsResponse:
     if requester_api_key != api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authorization key must match requested api_key",
+        raise AuthenticationError(
+            message="Authorization key must match requested api_key",
+            code="api_key_mismatch",
         )
 
     now = datetime.now(UTC)
