@@ -28,9 +28,10 @@ async def _check_provider(provider: Provider, model_name: str) -> tuple[str, dic
         latency_ms = int((time.perf_counter() - started) * 1000)
         if ok:
             return provider.value, {"status": "ok", "latency_ms": latency_ms}
-        return provider.value, {"status": "error", "error": "health_check returned false"}
+        return provider.value, {"status": "error", "latency_ms": latency_ms, "error": "health_check returned false"}
     except Exception as exc:
-        return provider.value, {"status": "error", "error": str(exc)}
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        return provider.value, {"status": "error", "latency_ms": latency_ms, "error": str(exc)}
 
 
 @router.get("/health")
