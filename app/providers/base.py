@@ -29,6 +29,18 @@ class ProviderHTTPError(ProviderError):
         self.body_preview = body_preview
 
 
+class ProviderUnauthorizedError(ProviderHTTPError):
+    """HTTP 401 — invalid or missing API credentials."""
+
+
+class ProviderRateLimitError(ProviderHTTPError):
+    """HTTP 429 — rate limited by upstream."""
+
+
+class ProviderServerError(ProviderHTTPError):
+    """HTTP 5xx — upstream server error."""
+
+
 class ProviderRequestError(ProviderError):
     """Network / transport failure (no HTTP response or not classified elsewhere)."""
 
@@ -94,11 +106,19 @@ class BaseLLMProvider(ABC):
             msg = f"HTTP {prev.status_code}"
             if preview:
                 msg = f"{msg}: {preview}"
-            raise ProviderHTTPError(
-                msg,
-                status_code=prev.status_code,
-                body_preview=preview,
-            ) from exc
+            code = prev.status_code
+            kwargs: dict[str, Any] = {
+                "message": msg,
+                "status_code": code,
+                "body_preview": preview,
+            }
+            if code == 401:
+                raise ProviderUnauthorizedError(**kwargs) from exc
+            if code == 429:
+                raise ProviderRateLimitError(**kwargs) from exc
+            if code >= 500:
+                raise ProviderServerError(**kwargs) from exc
+            raise ProviderHTTPError(**kwargs) from exc
         except httpx.RequestError as exc:
             raise ProviderRequestError(str(exc) or "upstream request failed") from exc
         else:
