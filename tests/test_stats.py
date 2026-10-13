@@ -1,77 +1,146 @@
-"""Integration tests for GET /stats/{api_key}."""
+"""Authenticated usage uses stable client identities and never URL secrets."""
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
+import pytest
+
 from app.services.redis import RedisService
-from tests.conftest import AUTH_HEADERS, GATEWAY_KEY
+from tests.conftest import (
+    AUTH_HEADERS,
+    CLIENT_ID,
+    GATEWAY_KEY,
+    OTHER_AUTH_HEADERS,
+    OTHER_CLIENT_ID,
+    OTHER_GATEWAY_KEY,
+    ROTATED_AUTH_HEADERS,
+    ROTATED_GATEWAY_KEY,
+    key_digest,
+)
 
 
-async def test_stats_empty_returns_zeros(client):
-    """Stats for a key with no activity returns all-zero buckets."""
-    resp = await client.get(f"/stats/{GATEWAY_KEY}", headers=AUTH_HEADERS)
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["today"]["request_count"] == 0
-    assert data["today"]["prompt_tokens"] == 0
-    assert data["today"]["completion_tokens"] == 0
-    assert data["today"]["total_cost_usd"] == 0.0
-    assert data["current_month"]["request_count"] == 0
-
-
-async def test_stats_key_mismatch_returns_401(client):
-    """Querying stats for a different key must return 401."""
-    resp = await client.get("/stats/somebody-elses-key", headers=AUTH_HEADERS)
-
-    assert resp.status_code == 401
-    data = resp.json()
-    assert data["error"]["code"] == "api_key_mismatch"
-    assert data["error"]["type"] == "authentication_error"
+async def test_usage_empty_returns_zeros(client):
+    response = await client.get("/me/usage", headers=AUTH_HEADERS)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["client_id"] == CLIENT_ID
+    assert data["today"] == {
+        "request_count": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_cost_usd": 0.0,
+    }
+    assert data["current_month"] == data["today"]
 
 
-async def test_stats_reflects_persisted_usage(client, fake_redis):
-    """After usage is persisted, stats endpoint returns the correct counters."""
-    svc = RedisService(fake_redis)
-    await svc.increment_usage_stats(
-        api_key=GATEWAY_KEY,
+@pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer unknown-token"}])
+async def test_usage_requires_valid_authentication(client, headers):
+    response = await client.get("/me/usage", headers=headers)
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Bearer"
+    assert response.json()["error"]["type"] == "authentication_error"
+
+
+async def test_old_stats_path_is_removed(client):
+    response = await client.get("/stats/removed-key", headers=AUTH_HEADERS)
+    assert response.status_code == 404
+
+
+async def test_usage_reflects_persisted_client_aggregates(client, fake_redis):
+    await RedisService(fake_redis).increment_usage_stats(
+        client_id=CLIENT_ID,
         prompt_tokens=150,
         completion_tokens=250,
         total_cost=0.02,
     )
+    response = await client.get("/me/usage", headers=AUTH_HEADERS)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["client_id"] == CLIENT_ID
+    assert data["today"] == {
+        "request_count": 1,
+        "prompt_tokens": 150,
+        "completion_tokens": 250,
+        "total_cost_usd": 0.02,
+    }
+    assert data["current_month"] == data["today"]
 
-    resp = await client.get(f"/stats/{GATEWAY_KEY}", headers=AUTH_HEADERS)
 
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["today"]["request_count"] == 1
-    assert data["today"]["prompt_tokens"] == 150
-    assert data["today"]["completion_tokens"] == 250
-    assert data["today"]["total_cost_usd"] == 0.02
-
-
-async def test_stats_accumulates_multiple_requests(client, fake_redis):
-    """Multiple persisted usages must sum correctly."""
-    svc = RedisService(fake_redis)
+async def test_usage_accumulates_multiple_requests(client, fake_redis):
+    service = RedisService(fake_redis)
     for _ in range(4):
-        await svc.increment_usage_stats(
-            api_key=GATEWAY_KEY,
+        await service.increment_usage_stats(
+            client_id=CLIENT_ID,
             prompt_tokens=100,
             completion_tokens=100,
             total_cost=0.005,
         )
-
-    resp = await client.get(f"/stats/{GATEWAY_KEY}", headers=AUTH_HEADERS)
-    data = resp.json()
-
+    response = await client.get("/me/usage", headers=AUTH_HEADERS)
+    assert response.status_code == 200
+    data = response.json()
     assert data["today"]["request_count"] == 4
     assert data["today"]["prompt_tokens"] == 400
     assert data["current_month"]["completion_tokens"] == 400
+    assert data["today"]["total_cost_usd"] == pytest.approx(0.02)
 
 
-async def test_stats_api_key_is_masked_in_response(client, fake_redis):
-    """The api_key field in the response must be masked, not the full value."""
-    resp = await client.get(f"/stats/{GATEWAY_KEY}", headers=AUTH_HEADERS)
+async def test_usage_isolated_between_clients_and_not_selected_by_query(
+    client, fake_redis
+):
+    service = RedisService(fake_redis)
+    await service.increment_usage_stats(
+        client_id=CLIENT_ID, prompt_tokens=10, completion_tokens=20, total_cost=0.01
+    )
+    await service.increment_usage_stats(
+        client_id=OTHER_CLIENT_ID,
+        prompt_tokens=70,
+        completion_tokens=80,
+        total_cost=0.02,
+    )
+    first = await client.get(
+        "/me/usage", headers=AUTH_HEADERS, params={"client_id": OTHER_CLIENT_ID}
+    )
+    second = await client.get("/me/usage", headers=OTHER_AUTH_HEADERS)
+    assert first.status_code == second.status_code == 200
+    assert first.json()["client_id"] == CLIENT_ID
+    assert second.json()["client_id"] == OTHER_CLIENT_ID
+    assert first.json()["today"]["prompt_tokens"] == 10
+    assert second.json()["today"]["prompt_tokens"] == 70
+    assert first.json()["current_month"]["completion_tokens"] == 20
+    assert second.json()["current_month"]["completion_tokens"] == 80
 
-    data = resp.json()
-    assert GATEWAY_KEY not in data["api_key"], "Full API key must not appear in response"
-    assert data["api_key"].endswith(GATEWAY_KEY[-4:])
+
+async def test_key_rotation_reads_same_existing_usage(client, fake_redis):
+    await RedisService(fake_redis).increment_usage_stats(
+        client_id=CLIENT_ID, prompt_tokens=17, completion_tokens=19, total_cost=0.01
+    )
+    original = await client.get("/me/usage", headers=AUTH_HEADERS)
+    rotated = await client.get("/me/usage", headers=ROTATED_AUTH_HEADERS)
+    assert original.status_code == rotated.status_code == 200
+    assert original.json() == rotated.json()
+    assert rotated.json()["today"]["request_count"] == 1
+
+
+async def test_usage_response_contains_identity_without_bearer_suffix_or_hash(client):
+    response = await client.get("/me/usage", headers=AUTH_HEADERS)
+    assert set(response.json()) == {"client_id", "today", "current_month"}
+    for secret in (GATEWAY_KEY, OTHER_GATEWAY_KEY, ROTATED_GATEWAY_KEY):
+        assert secret not in response.text
+        assert secret[-4:] not in response.text
+        assert key_digest(secret) not in response.text
+    assert "api_key" not in response.json()
+
+
+async def test_legacy_secret_indexed_history_is_not_silently_transferred(
+    client, fake_redis
+):
+    day = datetime.now(UTC).strftime("%Y-%m-%d")
+    legacy_key = f"usage:{GATEWAY_KEY}:daily:{day}"
+    await fake_redis.hset(
+        legacy_key, mapping={"request_count": 9, "prompt_tokens": 900}
+    )
+    response = await client.get("/me/usage", headers=AUTH_HEADERS)
+    assert response.status_code == 200
+    assert response.json()["today"]["request_count"] == 0
+    assert await fake_redis.hget(legacy_key, "request_count") == "9"

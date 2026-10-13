@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 from enum import StrEnum
 from functools import lru_cache
 from typing import ClassVar
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.auth import ClientRegistration
 
 
 class Provider(StrEnum):
@@ -22,6 +25,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     openai_api_key: SecretStr | None = None
@@ -38,12 +42,29 @@ class Settings(BaseSettings):
     rate_limit_rpm: int = Field(
         default=60,
         ge=1,
-        description="Max chat completion requests per API key per minute (sliding window)",
+        description="Max chat completion requests per client per minute (sliding window)",
     )
-    default_api_key: SecretStr | None = Field(
-        default=None,
-        description="Optional shared API key accepted by the gateway (Bearer)",
+    gateway_clients: list[ClientRegistration] = Field(
+        default_factory=list,
+        description="Client registrations as JSON: client_id, key_sha256 and enabled",
+        repr=False,
     )
+
+    @field_validator("gateway_clients")
+    @classmethod
+    def reject_duplicate_key_hashes(
+        cls, clients: list[ClientRegistration]
+    ) -> list[ClientRegistration]:
+        hashes = [client.key_sha256 for client in clients]
+        if len(hashes) != len(set(hashes)):
+            raise ValueError("Duplicate client key hashes are not allowed")
+        identity_hashes = {
+            hashlib.sha256(client.client_id.encode("ascii")).hexdigest()
+            for client in clients
+        }
+        if identity_hashes.intersection(hashes):
+            raise ValueError("Client identifiers must not also be bearer credentials")
+        return clients
 
     provider_by_model: ClassVar[dict[str, Provider]] = {
         "deepseek-chat": Provider.DEEPSEEK,

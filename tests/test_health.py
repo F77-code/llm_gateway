@@ -9,7 +9,6 @@ so patching the base class method intercepts all subclass calls correctly.
 from __future__ import annotations
 
 import httpx
-import pytest
 from unittest.mock import AsyncMock
 
 from app.providers.base import BaseLLMProvider, ProviderError
@@ -22,7 +21,10 @@ def _ok_response() -> httpx.Response:
 async def test_health_all_providers_ok(client, mocker):
     """When all providers respond healthy, status is 'healthy' and HTTP 200."""
     mocker.patch.object(
-        BaseLLMProvider, "_http_request", new_callable=AsyncMock, return_value=_ok_response()
+        BaseLLMProvider,
+        "_http_request",
+        new_callable=AsyncMock,
+        return_value=_ok_response(),
     )
 
     resp = await client.get("/health")
@@ -52,7 +54,10 @@ async def test_health_all_providers_fail(client, mocker):
 async def test_health_response_has_providers_dict(client, mocker):
     """Response must include a 'providers' dict with at least one entry."""
     mocker.patch.object(
-        BaseLLMProvider, "_http_request", new_callable=AsyncMock, return_value=_ok_response()
+        BaseLLMProvider,
+        "_http_request",
+        new_callable=AsyncMock,
+        return_value=_ok_response(),
     )
 
     resp = await client.get("/health")
@@ -66,7 +71,10 @@ async def test_health_response_has_providers_dict(client, mocker):
 async def test_health_provider_entry_has_latency(client, mocker):
     """Each provider entry must include latency_ms regardless of outcome."""
     mocker.patch.object(
-        BaseLLMProvider, "_http_request", new_callable=AsyncMock, return_value=_ok_response()
+        BaseLLMProvider,
+        "_http_request",
+        new_callable=AsyncMock,
+        return_value=_ok_response(),
     )
 
     resp = await client.get("/health")
