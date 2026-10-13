@@ -21,3 +21,24 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  checks:
+    profiles: ["checks"]
+    build:
+      context: .
+      target: checks
+    environment:
+      TEST_REDIS_URL: redis://redis-test:6379/0
+    depends_on:
+      redis-test:
+        condition: service_healthy
+
+  redis-test:
+    profiles: ["checks"]
+    image: redis:7.4.7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 15
