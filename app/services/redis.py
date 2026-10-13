@@ -126,7 +126,7 @@ class RedisService:
     async def increment_usage_stats(
         self,
         *,
-        api_key: str,
+        client_id: str,
         prompt_tokens: int,
         completion_tokens: int,
         total_cost: float,
@@ -135,8 +135,8 @@ class RedisService:
         ts = now or datetime.now(UTC)
         day = ts.strftime("%Y-%m-%d")
         month = ts.strftime("%Y-%m")
-        daily_key = f"usage:{api_key}:daily:{day}"
-        monthly_key = f"usage:{api_key}:monthly:{month}"
+        daily_key = f"usage:{client_id}:daily:{day}"
+        monthly_key = f"usage:{client_id}:monthly:{month}"
 
         total_tokens = prompt_tokens + completion_tokens
         daily_ttl = 7 * 24 * 60 * 60

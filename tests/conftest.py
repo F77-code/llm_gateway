@@ -9,8 +9,9 @@ The test app is built from scratch (without lifespan side effects):
 
 from __future__ import annotations
 
+import hashlib
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -20,25 +21,53 @@ import pytest
 import pytest_asyncio
 from asgi_lifespan import LifespanManager
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
 from pydantic import SecretStr
 
 from app.config import Settings
-from app.exceptions import AppError, AuthenticationError, RateLimitExceeded
+from app.exceptions import AppError
 from app.logging_config import setup_logging
-from app.main import _openai_error_payload
+from app.main import app_error_handler, unhandled_exception_handler
 from app.providers.registry import configure_registry, reset_registry
 from app.routers import api_router
 from app.services.redis import RedisService
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
 setup_logging()
 
-GATEWAY_KEY = "test-gateway-key"
+CLIENT_ID = "client-alpha"
+OTHER_CLIENT_ID = "client-beta"
+REVOKED_CLIENT_ID = "client-revoked"
+GATEWAY_KEY = "gw_test_alpha_Q2jp91PLvTUf68DYsKc0eWn4bRmxA5h7sZQ"
+OTHER_GATEWAY_KEY = "gw_test_beta_C83kP4mLX0rG2WqF9aN6vJtZ1yEbH5u8dRC"
+ROTATED_GATEWAY_KEY = "gw_test_rotated_V4yF0K2wB7nXa9qG3zL5mHe6tRj1cDu8pQS"
+REVOKED_GATEWAY_KEY = "gw_test_revoked_T1xQ8W2nP5fV0hS7jY4bD9mK6cLgA3uZeRC"
 AUTH_HEADERS = {"Authorization": f"Bearer {GATEWAY_KEY}"}
+OTHER_AUTH_HEADERS = {"Authorization": f"Bearer {OTHER_GATEWAY_KEY}"}
+ROTATED_AUTH_HEADERS = {"Authorization": f"Bearer {ROTATED_GATEWAY_KEY}"}
+
+
+def key_digest(key: str) -> str:
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def client_registrations() -> list[dict[str, str | bool]]:
+    return [
+        {"client_id": CLIENT_ID, "key_sha256": key_digest(GATEWAY_KEY)},
+        {"client_id": CLIENT_ID, "key_sha256": key_digest(ROTATED_GATEWAY_KEY)},
+        {"client_id": OTHER_CLIENT_ID, "key_sha256": key_digest(OTHER_GATEWAY_KEY)},
+        {
+            "client_id": REVOKED_CLIENT_ID,
+            "key_sha256": key_digest(REVOKED_GATEWAY_KEY),
+            "enabled": False,
+        },
+    ]
 
 
 def make_test_settings() -> Settings:
     return Settings(
+        _env_file=None,
         openai_api_key=SecretStr("sk-test-openai"),
         anthropic_api_key=SecretStr("sk-test-anthropic"),
         gemini_api_key=SecretStr("test-gemini"),
@@ -47,7 +76,7 @@ def make_test_settings() -> Settings:
         xai_api_key=SecretStr("xai-test"),
         redis_url="fake://",
         rate_limit_rpm=20,
-        default_api_key=SecretStr(GATEWAY_KEY),
+        gateway_clients=client_registrations(),
     )
 
 
@@ -79,29 +108,9 @@ def build_test_app(redis_svc: RedisService, settings: Settings) -> FastAPI:
 
     app.include_router(api_router)
 
-    @app.exception_handler(AppError)
-    async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
-        headers = None
-        if isinstance(exc, AuthenticationError):
-            headers = {"WWW-Authenticate": "Bearer"}
-        if isinstance(exc, RateLimitExceeded):
-            raw = exc.context.get("headers")
-            if isinstance(raw, dict):
-                headers = {str(k): str(v) for k, v in raw.items()}
-        return JSONResponse(
-            status_code=exc.status_code,
-            content=_openai_error_payload(exc.message, exc.error_type, exc.code),
-            headers=headers,
-        )
-
-    @app.exception_handler(Exception)
-    async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
-        return JSONResponse(
-            status_code=500,
-            content=_openai_error_payload(
-                "Internal server error", "server_error", "internal_error"
-            ),
-        )
+    # Exercise the production handlers, including their structured log payloads.
+    app.add_exception_handler(AppError, app_error_handler)
+    app.add_exception_handler(Exception, unhandled_exception_handler)
 
     return app
 
@@ -118,9 +127,14 @@ async def redis_svc(fake_redis) -> RedisService:
     return RedisService(fake_redis)
 
 
+@pytest.fixture
+def test_settings() -> Settings:
+    return make_test_settings()
+
+
 @pytest_asyncio.fixture
-async def client(fake_redis):
-    settings = make_test_settings()
+async def client(fake_redis, test_settings):
+    settings = test_settings
     svc = RedisService(fake_redis)
     app = build_test_app(svc, settings)
 

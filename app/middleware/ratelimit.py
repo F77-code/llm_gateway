@@ -7,7 +7,7 @@ from fastapi import Depends, Request, Response
 import redis.asyncio as redis
 
 from app.config import get_settings
-from app.dependencies import get_api_key
+from app.dependencies import get_client_id
 from app.exceptions import RateLimitExceeded
 
 WINDOW_SECONDS = 60
@@ -25,12 +25,12 @@ def _headers(limit: int, remaining: int, reset_ts: int) -> dict[str, str]:
 async def enforce_rate_limit(
     request: Request,
     response: Response,
-    api_key: str = Depends(get_api_key),
+    client_id: str = Depends(get_client_id),
 ) -> str:
     settings = get_settings()
     limit = settings.rate_limit_rpm
     redis_service = request.app.state.redis_service
-    key = f"ratelimit:{api_key}"
+    key = f"ratelimit:{client_id}"
     try:
         result = await redis_service.check_and_increment_sliding_window(
             key=key,
@@ -41,7 +41,7 @@ async def enforce_rate_limit(
     except redis.RedisError as exc:
         # Fail-open: Redis issues should not block traffic.
         logger.warning("Redis unavailable for rate limiting, allowing request: %s", exc)
-        return api_key
+        return client_id
 
     if not result.allowed:
         raise RateLimitExceeded(
@@ -56,4 +56,4 @@ async def enforce_rate_limit(
 
     for h, v in _headers(result.limit, result.remaining, result.reset_ts).items():
         response.headers[h] = v
-    return api_key
+    return client_id

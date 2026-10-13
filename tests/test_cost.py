@@ -18,7 +18,9 @@ def test_model_prices_covers_all_configured_models():
 
 
 def test_calculate_cost_returns_zero_for_unknown_model():
-    cost = calculate_cost("unknown-model-xyz", prompt_tokens=1000, completion_tokens=500)
+    cost = calculate_cost(
+        "unknown-model-xyz", prompt_tokens=1000, completion_tokens=500
+    )
     assert cost == 0.0
 
 
@@ -64,10 +66,15 @@ def test_calculate_cost_negative_completion_tokens_raises():
 def test_cost_service_uses_custom_prices():
     custom = {"my-model": ModelPrice(input_per_1m=10.0, output_per_1m=20.0)}
     svc = CostService(prices=custom)
-    cost = svc.calculate_cost("my-model", prompt_tokens=1_000_000, completion_tokens=1_000_000)
+    cost = svc.calculate_cost(
+        "my-model", prompt_tokens=1_000_000, completion_tokens=1_000_000
+    )
     assert abs(cost - 30.0) < 1e-9
 
 
 def test_cost_service_unknown_model_returns_zero():
     svc = CostService()
-    assert svc.calculate_cost("ghost-model", prompt_tokens=100, completion_tokens=100) == 0.0
+    assert (
+        svc.calculate_cost("ghost-model", prompt_tokens=100, completion_tokens=100)
+        == 0.0
+    )

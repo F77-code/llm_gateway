@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import time
 
-import pytest
 from unittest.mock import AsyncMock
 
 from app.models.chat_completion import ChatCompletionChoice, ChatCompletionResponse
@@ -49,7 +48,10 @@ async def test_chat_success(client, mocker):
     resp = await client.post(
         "/v1/chat/completions",
         headers=AUTH_HEADERS,
-        json={"model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "Hello"}]},
+        json={
+            "model": "gpt-4.1-mini",
+            "messages": [{"role": "user", "content": "Hello"}],
+        },
     )
 
     assert resp.status_code == 200
@@ -99,12 +101,13 @@ async def test_chat_unknown_model(client):
 
 
 async def test_chat_missing_auth(client):
-    """Missing Authorization header → 422 (FastAPI validation error)."""
+    """Missing Authorization header produces an authentication challenge."""
     resp = await client.post(
         "/v1/chat/completions",
         json={"model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "Hi"}]},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 401
+    assert resp.headers["www-authenticate"] == "Bearer"
 
 
 async def test_chat_wrong_auth(client):
@@ -121,7 +124,7 @@ async def test_chat_wrong_auth(client):
 
 
 async def test_chat_invalid_auth_scheme(client):
-    """Non-Bearer scheme → 401 with invalid_authorization_header code."""
+    """Non-Bearer scheme produces the same credential error as unknown keys."""
     resp = await client.post(
         "/v1/chat/completions",
         headers={"Authorization": "Basic dXNlcjpwYXNz"},
@@ -130,7 +133,7 @@ async def test_chat_invalid_auth_scheme(client):
 
     assert resp.status_code == 401
     data = resp.json()
-    assert data["error"]["code"] == "invalid_authorization_header"
+    assert data["error"]["code"] == "invalid_api_key"
 
 
 async def test_chat_stream_not_supported(client):

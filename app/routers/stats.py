@@ -6,10 +6,10 @@ import redis.asyncio as redis
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
-from app.dependencies import get_api_key
-from app.exceptions import AuthenticationError, ServiceUnavailableError
+from app.dependencies import get_client_id
+from app.exceptions import ServiceUnavailableError
 
-router = APIRouter(prefix="/stats", tags=["stats"])
+router = APIRouter(prefix="/me", tags=["usage"])
 
 
 class UsageBucket(BaseModel):
@@ -19,16 +19,10 @@ class UsageBucket(BaseModel):
     total_cost_usd: float = Field(default=0.0)
 
 
-class StatsResponse(BaseModel):
-    api_key: str
+class UsageResponse(BaseModel):
+    client_id: str
     today: UsageBucket
     current_month: UsageBucket
-
-
-def _mask_api_key(api_key: str) -> str:
-    if len(api_key) <= 4:
-        return "****" + api_key
-    return f"***masked***{api_key[-4:]}"
 
 
 def _to_bucket(payload: dict[str, str]) -> UsageBucket:
@@ -40,23 +34,16 @@ def _to_bucket(payload: dict[str, str]) -> UsageBucket:
     )
 
 
-@router.get("/{api_key}", response_model=StatsResponse)
-async def get_stats(
-    api_key: str,
+@router.get("/usage", response_model=UsageResponse)
+async def get_usage(
     request: Request,
-    requester_api_key: str = Depends(get_api_key),
-) -> StatsResponse:
-    if requester_api_key != api_key:
-        raise AuthenticationError(
-            message="Authorization key must match requested api_key",
-            code="api_key_mismatch",
-        )
-
+    client_id: str = Depends(get_client_id),
+) -> UsageResponse:
     now = datetime.now(UTC)
     day = now.strftime("%Y-%m-%d")
     month = now.strftime("%Y-%m")
-    daily_key = f"usage:{api_key}:daily:{day}"
-    monthly_key = f"usage:{api_key}:monthly:{month}"
+    daily_key = f"usage:{client_id}:daily:{day}"
+    monthly_key = f"usage:{client_id}:monthly:{month}"
 
     redis_service = request.app.state.redis_service
     try:
@@ -64,12 +51,12 @@ async def get_stats(
         monthly_raw = await redis_service.client.hgetall(monthly_key)
     except redis.RedisError as exc:
         raise ServiceUnavailableError(
-            f"Stats storage unavailable: {exc}",
-            code="stats_storage_unavailable",
+            "Usage storage unavailable",
+            code="usage_storage_unavailable",
         ) from exc
 
-    return StatsResponse(
-        api_key=_mask_api_key(api_key),
+    return UsageResponse(
+        client_id=client_id,
         today=_to_bucket(daily_raw),
         current_month=_to_bucket(monthly_raw),
     )

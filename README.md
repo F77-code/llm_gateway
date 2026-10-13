@@ -8,9 +8,9 @@ Project provides a single `/v1/chat/completions` endpoint and routes requests by
 
 - OpenAI-compatible endpoint: `POST /v1/chat/completions`
 - Model-based routing to providers: OpenAI, Anthropic, Gemini, DeepSeek, Perplexity, xAI
-- Per-API-key rate limit (requests per minute, sliding window, Redis-backed)
+- Per-client rate limit (requests per minute, sliding window, Redis-backed)
 - Usage and cost aggregation in Redis (daily and monthly buckets)
-- Stats endpoint: `GET /stats/{api_key}`
+- Authenticated usage endpoint: `GET /me/usage`
 - Health endpoint: `GET /health` with Redis + provider checks
 - Structured error responses in OpenAI-like format
 - Request tracing via `X-Request-ID`
@@ -33,6 +33,17 @@ cp .env.example .env
 
 2. Fill provider API keys in `.env` (at least one provider key is required).
 
+   Generate a client key in Docker (after building the checks image):
+
+```bash
+docker compose --profile checks build checks
+docker compose --profile checks run --rm --no-deps checks python scripts/create_client_key.py --client-id team-a
+```
+
+   Store the returned `api_key` securely. Put only its `registration` object into
+   the `GATEWAY_CLIENTS` JSON array in `.env`. Empty configuration accepts no
+   clients. Provider API keys and gateway client keys have separate purposes.
+
 3. Run services:
 
 ```bash
@@ -46,7 +57,7 @@ docker compose up --build
 
 All application and development commands run inside Docker; host Python is not
 required. The autonomous mock-provider demo is tracked in the next infrastructure
-PR. This first limiter PR retains the existing real-provider configuration.
+PR. The current runtime uses the existing real-provider configuration.
 
 ## Configuration
 
@@ -65,9 +76,19 @@ Environment variables are loaded from `.env` (`.env.example` as template).
 
 - `REDIS_URL` (default: `redis://localhost:6379/0`)
 - `RATE_LIMIT_RPM` (default: `60`)
-- `DEFAULT_API_KEY` (optional shared gateway token for `Authorization: Bearer ...`)
+- `GATEWAY_CLIENTS` (JSON array of `client_id`, `key_sha256`, `enabled` registrations)
 
-If `DEFAULT_API_KEY` is set, every request must use exactly this token.
+Send the generated client key using `Authorization: Bearer ...`. Missing,
+malformed, unknown and disabled keys return `401`. Store only hashes in client
+registration configuration. Rotate a key by adding another hash for the same
+stable client ID, then disable/remove the previous registration; quota and usage
+remain attached to the client ID. Different clients have separate quota/usage.
+Registrations reload when the process restarts; online administration comes later.
+
+`DEFAULT_API_KEY` and arbitrary-token access are removed. Configure client
+registrations explicitly. Existing aggregates indexed by old raw tokens are not
+automatically migrated; retain/export them privately if needed and start the new
+client-ID aggregates. Do not send historical secrets in URLs to access them.
 
 ## API
 
@@ -81,7 +102,7 @@ Example:
 
 ```bash
 curl -X POST http://localhost:8000/v1/chat/completions \
-  -H "Authorization: Bearer <YOUR_GATEWAY_KEY_OR_ANY_IF_NOT_SET>" \
+  -H "Authorization: Bearer <YOUR_GENERATED_CLIENT_KEY>" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gpt-5",
@@ -98,22 +119,24 @@ Notes:
 - Unknown `model` returns `400` with `model_not_found`.
 - Upstream provider failures are normalized to gateway errors.
 
-### 2) Stats
+### 2) Usage
 
-`GET /stats/{api_key}`
+`GET /me/usage`
 
 Returns usage for:
 
 - current day (`today`)
 - current month (`current_month`)
 
-Security rule: bearer token must match path `api_key`.
+The authenticated client is selected from its bearer key. The response contains
+the stable `client_id`; no secret, hash or key suffix is returned. The former
+`/stats/{api_key}` endpoint is removed.
 
 Example:
 
 ```bash
-curl -X GET http://localhost:8000/stats/my-api-key \
-  -H "Authorization: Bearer my-api-key"
+curl http://localhost:8000/me/usage \
+  -H "Authorization: Bearer <YOUR_GENERATED_CLIENT_KEY>"
 ```
 
 ### 3) Health
@@ -148,11 +171,11 @@ Current examples include:
 ├── app/
 │   ├── main.py                  # FastAPI app, lifecycle, error handlers
 │   ├── config.py                # settings + model-to-provider routing
-│   ├── dependencies.py          # auth dependency
+│   ├── dependencies.py          # client identity dependency
 │   ├── middleware/ratelimit.py  # Redis sliding-window limiter
 │   ├── routers/
 │   │   ├── chat.py              # /v1/chat/completions
-│   │   ├── stats.py             # /stats/{api_key}
+│   │   ├── stats.py             # /me/usage
 │   │   └── health.py            # /health
 │   ├── providers/               # provider adapters + registry
 │   └── services/                # Redis + cost accounting
@@ -163,7 +186,7 @@ Current examples include:
 
 ## Development
 
-Build and run the limiter quality checks and the complete test suite:
+Build and run admission/authentication quality checks and the complete test suite:
 
 ```bash
 docker compose --profile checks build checks
@@ -175,8 +198,9 @@ Real Redis integration tests are mandatory: missing or unreachable
 `TEST_REDIS_URL` fails the run. Tests create UUID-prefixed keys and delete only
 their own keys. They never flush the database or use application Redis.
 
-The first PR checks lint, formatting and types for the limiter and its tests;
-repository-wide quality checks and CI belong to the infrastructure PR. All
+The checks cover lint, formatting and types for admission, authentication and
+usage modules, and lint/formatting for all tests and scripts. Repository-wide
+provider quality checks and CI belong to the infrastructure PR. All
 existing tests run. Dependency installation uses uv and the committed lockfile,
 with release artifacts restricted to those available by 7 April 2026. See
 [release evidence](docs/specs/dependencies.md).

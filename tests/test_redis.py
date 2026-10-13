@@ -234,15 +234,15 @@ async def test_rate_limit_accepts_largest_supported_integer_arguments(svc):
 
 async def test_usage_stats_incremented(svc):
     await svc.increment_usage_stats(
-        api_key="key-a",
+        client_id="client-a",
         prompt_tokens=100,
         completion_tokens=200,
         total_cost=0.01,
     )
 
     now = datetime.now(UTC)
-    daily_key = f"usage:key-a:daily:{now.strftime('%Y-%m-%d')}"
-    monthly_key = f"usage:key-a:monthly:{now.strftime('%Y-%m')}"
+    daily_key = f"usage:client-a:daily:{now.strftime('%Y-%m-%d')}"
+    monthly_key = f"usage:client-a:monthly:{now.strftime('%Y-%m')}"
 
     daily = await svc.client.hgetall(daily_key)
     assert int(daily["prompt_tokens"]) == 100
@@ -258,14 +258,14 @@ async def test_usage_stats_incremented(svc):
 async def test_usage_stats_accumulate_across_calls(svc):
     for _ in range(3):
         await svc.increment_usage_stats(
-            api_key="key-b",
+            client_id="client-b",
             prompt_tokens=50,
             completion_tokens=100,
             total_cost=0.005,
         )
 
     now = datetime.now(UTC)
-    daily_key = f"usage:key-b:daily:{now.strftime('%Y-%m-%d')}"
+    daily_key = f"usage:client-b:daily:{now.strftime('%Y-%m-%d')}"
     daily = await svc.client.hgetall(daily_key)
 
     assert int(daily["request_count"]) == 3
@@ -276,17 +276,17 @@ async def test_usage_stats_accumulate_across_calls(svc):
 
 async def test_usage_stats_different_keys_are_independent(svc):
     await svc.increment_usage_stats(
-        api_key="key-x", prompt_tokens=10, completion_tokens=20, total_cost=0.001
+        client_id="client-x", prompt_tokens=10, completion_tokens=20, total_cost=0.001
     )
     await svc.increment_usage_stats(
-        api_key="key-y", prompt_tokens=30, completion_tokens=40, total_cost=0.002
+        client_id="client-y", prompt_tokens=30, completion_tokens=40, total_cost=0.002
     )
 
     now = datetime.now(UTC)
     day = now.strftime("%Y-%m-%d")
 
-    x = await svc.client.hgetall(f"usage:key-x:daily:{day}")
-    y = await svc.client.hgetall(f"usage:key-y:daily:{day}")
+    x = await svc.client.hgetall(f"usage:client-x:daily:{day}")
+    y = await svc.client.hgetall(f"usage:client-y:daily:{day}")
 
     assert int(x["prompt_tokens"]) == 10
     assert int(y["prompt_tokens"]) == 30
