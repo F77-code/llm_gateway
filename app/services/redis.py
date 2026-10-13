@@ -1,11 +1,40 @@
 from __future__ import annotations
 
+import math
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING, cast
 
 import redis.asyncio as redis
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Sequence
+
+
+_MAX_LIMIT = 2**53 - 1
+_MAX_WINDOW_SECONDS = 2**31 - 1
+
+
+_SLIDING_WINDOW_SCRIPT = """
+local key = KEYS[1]
+local limit = tonumber(ARGV[3])
+
+redis.call('ZREMRANGEBYSCORE', key, '-inf', ARGV[2])
+local count = redis.call('ZCARD', key)
+local allowed = 0
+
+if count < limit then
+    redis.call('ZADD', key, ARGV[1], ARGV[4])
+    redis.call('EXPIRE', key, ARGV[5])
+    count = count + 1
+    allowed = 1
+end
+
+local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+return {allowed, count, oldest[2]}
+"""
 
 
 @dataclass(slots=True)
@@ -42,43 +71,56 @@ class RedisService:
         window_seconds: int = 60,
         now: float | None = None,
     ) -> RateLimitResult:
-        ts = float(now if now is not None else time.time())
-        member = f"{ts:.6f}:{uuid.uuid4().hex}"
-        ttl = window_seconds * 2 + 1
-        min_score = ts - window_seconds
+        """Admit atomically for nondecreasing finite Unix timestamps.
 
-        # Step 1: clean up expired entries and read current count atomically.
-        async with self._client.pipeline(transaction=False) as pipe:
-            pipe.zremrangebyscore(key, "-inf", min_score)
-            pipe.zcard(key)
-            results = await pipe.execute()
-
-        current_count = int(results[1])
-
-        if current_count >= limit:
-            oldest = await self._client.zrange(key, 0, 0, withscores=True)
-            if oldest:
-                reset_ts = int(float(oldest[0][1]) + window_seconds)
-            else:
-                reset_ts = int(ts + window_seconds)
-            return RateLimitResult(
-                allowed=False,
-                limit=limit,
-                remaining=0,
-                reset_ts=reset_ts,
+        The limit is bounded by Lua's exact integer range; the window is bounded
+        to keep its admission TTL safely within Redis's expiration range.
+        """
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 0 < limit <= _MAX_LIMIT
+        ):
+            raise ValueError(f"limit must be a positive integer <= {_MAX_LIMIT}")
+        if (
+            isinstance(window_seconds, bool)
+            or not isinstance(window_seconds, int)
+            or not 0 < window_seconds <= _MAX_WINDOW_SECONDS
+        ):
+            raise ValueError(
+                f"window_seconds must be a positive integer <= {_MAX_WINDOW_SECONDS}"
             )
+        try:
+            ts = float(now if now is not None else time.time())
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("now must be a finite timestamp") from exc
+        if not math.isfinite(ts):
+            raise ValueError("now must be a finite timestamp")
+        min_score = ts - window_seconds
+        if not math.isfinite(min_score) or not math.isfinite(ts + window_seconds):
+            raise ValueError("now must yield finite window boundaries")
 
-        # Step 2: add the new entry.
-        async with self._client.pipeline(transaction=False) as pipe:
-            pipe.zadd(key, {member: ts})
-            pipe.expire(key, ttl)
-            await pipe.execute()
+        # Cleanup, admission and TTL updates share one atomic Redis operation.
+        allowed, count, oldest_score = await cast(
+            "Awaitable[Sequence[int | str]]",
+            self._client.eval(
+                _SLIDING_WINDOW_SCRIPT,
+                1,
+                key,
+                ts,
+                min_score,
+                limit,
+                uuid.uuid4().hex,
+                window_seconds * 2 + 1,
+            ),
+        )
 
         return RateLimitResult(
-            allowed=True,
+            allowed=bool(allowed),
             limit=limit,
-            remaining=max(0, limit - current_count - 1),
-            reset_ts=int(ts + window_seconds),
+            remaining=max(0, limit - int(count)),
+            # Scores are returned as strings: Lua numeric replies truncate fractions.
+            reset_ts=math.ceil(float(oldest_score) + window_seconds),
         )
 
     async def increment_usage_stats(

@@ -47,9 +47,6 @@ Thumbs.db
 htmlcov/
 .tox/
 .hypothesis/
-tests/
-test_*.py
-*_test.py
 
 # Logs
 logs/

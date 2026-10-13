@@ -26,9 +26,13 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-mock>=3.0",
-    "fakeredis>=2.0",
+    "fakeredis[lua]>=2.0",
     "asgi-lifespan>=2.0",
+    "mypy>=1.0",
 ]
+
+[tool.uv]
+exclude-newer = "2026-04-08T00:00:00Z"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
@@ -51,6 +55,8 @@ src = ["app"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
+markers = ["redis_integration: mandatory integration tests against isolated real Redis"]
 
 [tool.ruff.lint]
 select = [

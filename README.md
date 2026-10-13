@@ -44,16 +44,9 @@ docker compose up --build
 - App: `http://localhost:8000`
 - Docs: `http://localhost:8000/docs`
 
-## Local Run (without Docker)
-
-```bash
-python -m venv .venv
-source .venv/bin/activate  # Windows (Git Bash): source .venv/Scripts/activate
-pip install -e .
-uvicorn app.main:app --reload
-```
-
-For local mode, make sure Redis is available and `REDIS_URL` is configured.
+All application and development commands run inside Docker; host Python is not
+required. The autonomous mock-provider demo is tracked in the next infrastructure
+PR. This first limiter PR retains the existing real-provider configuration.
 
 ## Configuration
 
@@ -170,25 +163,38 @@ Current examples include:
 
 ## Development
 
-Install dev dependencies:
+Build and run the limiter quality checks and the complete test suite:
 
 ```bash
-pip install -e ".[dev]"
+docker compose --profile checks build checks
+docker compose --profile checks run --rm checks
 ```
 
-Run quality checks:
+The profile starts an isolated ephemeral `redis-test`, with no published port.
+Real Redis integration tests are mandatory: missing or unreachable
+`TEST_REDIS_URL` fails the run. Tests create UUID-prefixed keys and delete only
+their own keys. They never flush the database or use application Redis.
+
+The first PR checks lint, formatting and types for the limiter and its tests;
+repository-wide quality checks and CI belong to the infrastructure PR. All
+existing tests run. Dependency installation uses uv and the committed lockfile,
+with release artifacts restricted to those available by 7 April 2026. See
+[release evidence](docs/specs/dependencies.md).
+
+Run just the real Redis suite:
 
 ```bash
-ruff check .
-black --check .
-isort --check-only .
+docker compose --profile checks run --rm checks pytest -q tests/integration
 ```
 
-Run tests:
+The limiter atomically admits requests in `(now - window_seconds, now]`; an entry
+at the left boundary expires. `remaining` reports slots after the decision, and
+`reset_ts` is the oldest admission's expiry rounded up to Unix seconds on both
+accepted and denied responses. Concurrent calls use UUID members even when
+timestamps match. An accepted request refreshes TTL to `2 * window_seconds + 1`;
+a denied request leaves TTL unchanged. Gateway clocks must be synchronized.
 
-```bash
-pytest
-```
+See [the delivery plan](docs/specs/README.md) for subsequent reviewable PRs.
 
 ## Limitations
 
